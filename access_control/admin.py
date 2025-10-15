@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.urls import reverse
+from django.utils.html import format_html
 from .models import UserProfile, Door, LockState
 
 
@@ -29,11 +31,8 @@ class UserProfileInline(admin.StackedInline):
 # Extender User Admin para incluir UserProfile
 class UserAdmin(BaseUserAdmin):
     inlines = (UserProfileInline,)
-    list_display = ('username', 'email', 'first_name', 'last_name', 'is_staff', 'get_rol')
+    list_display = ('username', 'email', 'first_name', 'last_name', 'is_staff', 'get_rol', 'cambiar_password_link')
     list_filter = ('is_staff', 'is_superuser', 'is_active', 'groups', 'profile__rol')
-    
-    # Habilitar cambio de contraseña en el admin
-    change_password_form = None  # Usa el formulario por defecto de Django
     
     def get_rol(self, obj):
         """Mostrar el rol del perfil si existe"""
@@ -43,7 +42,87 @@ class UserAdmin(BaseUserAdmin):
             return '-'
     get_rol.short_description = 'Rol'
     get_rol.admin_order_field = 'profile__rol'
+    
+    def cambiar_password_link(self, obj):
+        """Enlace para cambiar contraseña (siempre visible, permisos se validan en la URL)"""
+        url = reverse('admin:auth_user_password_change', args=[obj.pk])
+        return format_html('<a href="{}">🔑 Cambiar contraseña</a>', url)
+    
+    def get_readonly_fields(self, request, obj=None):
+        """Control de campos según el rol del usuario actual"""
+        readonly = list(super().get_readonly_fields(request, obj))
+        
+        # Si no es superusuario, verificar permisos por rol
+        if not request.user.is_superuser:
+            try:
+                profile = request.user.profile
+                
+                # MAESTRO no puede editar is_superuser, is_staff, groups, user_permissions
+                if profile.rol == 'MAESTRO':
+                    readonly.extend(['is_superuser', 'is_staff', 'groups', 'user_permissions'])
+                
+                # ALUMNO no puede acceder al admin (se maneja en has_view_permission)
+                
+            except UserProfile.DoesNotExist:
+                # Si no tiene perfil, solo puede ver campos básicos
+                readonly.extend(['is_superuser', 'is_staff', 'groups', 'user_permissions'])
+        
+        return readonly
+    
+    def has_view_permission(self, request, obj=None):
+        """Control de visualización según rol"""
+        if request.user.is_superuser:
+            return True
+        
+        try:
+            profile = request.user.profile
+            # ADMIN, DIRECTOR y MAESTRO pueden ver usuarios
+            return profile.puede_gestionar_usuarios()
+        except UserProfile.DoesNotExist:
+            return False
+    
+    def has_change_permission(self, request, obj=None):
+        """Control de edición según rol"""
+        if request.user.is_superuser:
+            return True
+        
+        try:
+            profile = request.user.profile
+            # ADMIN, DIRECTOR y MAESTRO pueden editar usuarios
+            return profile.puede_gestionar_usuarios()
+        except UserProfile.DoesNotExist:
+            return False
+    
+    def has_add_permission(self, request):
+        """Control de creación según rol"""
+        if request.user.is_superuser:
+            return True
+        
+        try:
+            profile = request.user.profile
+            # Solo ADMIN y DIRECTOR pueden crear usuarios
+            return profile.rol in ['ADMIN', 'DIRECTOR'] and profile.activo
+        except UserProfile.DoesNotExist:
+            return False
+    
+    def has_delete_permission(self, request, obj=None):
+        """Control de eliminación según rol"""
+        if request.user.is_superuser:
+            return True
+        
+        try:
+            profile = request.user.profile
+            # Solo ADMIN puede eliminar usuarios
+            return profile.rol == 'ADMIN' and profile.activo
+        except UserProfile.DoesNotExist:
+            return False
 
+
+# Guardar request en el admin site para usar en métodos de instancia
+class AdminSite(admin.AdminSite):
+    def each_context(self, request):
+        self._request = request
+        return super().each_context(request)
 
 # Desregistrar el User admin original y registrar el personalizado
 admin.site.unregister(User)
@@ -57,7 +136,7 @@ class UserProfileAdmin(admin.ModelAdmin):
     """
     list_display = [
         'get_nombre_completo', 'rol', 'codigo_acceso', 'telefono', 
-        'activo', 'fecha_creacion'
+        'activo', 'fecha_creacion', 'cambiar_password_usuario'
     ]
     list_filter = ['rol', 'activo', 'fecha_creacion']
     search_fields = [
@@ -73,6 +152,12 @@ class UserProfileAdmin(admin.ModelAdmin):
         return obj.user.get_full_name() or obj.user.username
     get_nombre_completo.short_description = 'Usuario'
     get_nombre_completo.admin_order_field = 'user__username'
+    
+    def cambiar_password_usuario(self, obj):
+        """Enlace para cambiar contraseña del usuario"""
+        url = reverse('admin:auth_user_password_change', args=[obj.user.pk])
+        return format_html('<a href="{}">🔑 Cambiar contraseña</a>', url)
+    cambiar_password_usuario.short_description = 'Contraseña'
     
     fieldsets = (
         ('Información del Usuario', {
@@ -92,17 +177,72 @@ class UserProfileAdmin(admin.ModelAdmin):
     
     def get_readonly_fields(self, request, obj=None):
         """
-        El código de acceso es editable para:
-        - Superusuarios
-        - Staff con permisos de cambio de UserProfile
+        Control de campos según el rol del usuario actual
         """
         readonly = list(self.readonly_fields)
         
-        # Si no es superusuario y no tiene permisos, código de acceso es readonly
-        if not request.user.is_superuser and not request.user.has_perm('access_control.change_userprofile'):
-            readonly.append('codigo_acceso')
+        if not request.user.is_superuser:
+            try:
+                profile = request.user.profile
+                
+                # MAESTRO puede ver pero no modificar código de acceso
+                if profile.rol == 'MAESTRO':
+                    readonly.append('codigo_acceso')
+                
+                # DIRECTOR y ADMIN pueden editar código de acceso
+                
+            except UserProfile.DoesNotExist:
+                readonly.append('codigo_acceso')
         
         return readonly
+    
+    def has_view_permission(self, request, obj=None):
+        """Control de visualización según rol"""
+        if request.user.is_superuser:
+            return True
+        
+        try:
+            profile = request.user.profile
+            # ADMIN, DIRECTOR y MAESTRO pueden ver perfiles
+            return profile.puede_gestionar_usuarios()
+        except UserProfile.DoesNotExist:
+            return False
+    
+    def has_change_permission(self, request, obj=None):
+        """Control de edición según rol"""
+        if request.user.is_superuser:
+            return True
+        
+        try:
+            profile = request.user.profile
+            # ADMIN, DIRECTOR y MAESTRO pueden editar perfiles
+            return profile.puede_gestionar_usuarios()
+        except UserProfile.DoesNotExist:
+            return False
+    
+    def has_add_permission(self, request):
+        """Control de creación según rol"""
+        if request.user.is_superuser:
+            return True
+        
+        try:
+            profile = request.user.profile
+            # Solo ADMIN y DIRECTOR pueden crear perfiles
+            return profile.rol in ['ADMIN', 'DIRECTOR'] and profile.activo
+        except UserProfile.DoesNotExist:
+            return False
+    
+    def has_delete_permission(self, request, obj=None):
+        """Control de eliminación según rol"""
+        if request.user.is_superuser:
+            return True
+        
+        try:
+            profile = request.user.profile
+            # Solo ADMIN puede eliminar perfiles
+            return profile.rol == 'ADMIN' and profile.activo
+        except UserProfile.DoesNotExist:
+            return False
 
 
 @admin.register(Door)
