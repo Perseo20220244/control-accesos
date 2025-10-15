@@ -11,6 +11,19 @@ class UserProfileInline(admin.StackedInline):
     verbose_name_plural = 'Perfil de Control de Accesos'
     fk_name = 'user'
     fields = ('rol', 'codigo_acceso', 'telefono', 'activo')
+    
+    def get_readonly_fields(self, request, obj=None):
+        """
+        El código de acceso es editable solo para:
+        - Superusuarios
+        - Staff con permisos de cambio de UserProfile
+        """
+        if request.user.is_superuser:
+            return []
+        if request.user.has_perm('access_control.change_userprofile'):
+            return []
+        # Para usuarios sin permisos, el código es solo lectura
+        return ['codigo_acceso']
 
 
 # Extender User Admin para incluir UserProfile
@@ -18,6 +31,9 @@ class UserAdmin(BaseUserAdmin):
     inlines = (UserProfileInline,)
     list_display = ('username', 'email', 'first_name', 'last_name', 'is_staff', 'get_rol')
     list_filter = ('is_staff', 'is_superuser', 'is_active', 'groups', 'profile__rol')
+    
+    # Habilitar cambio de contraseña en el admin
+    change_password_form = None  # Usa el formulario por defecto de Django
     
     def get_rol(self, obj):
         """Mostrar el rol del perfil si existe"""
@@ -75,10 +91,18 @@ class UserProfileAdmin(admin.ModelAdmin):
     )
     
     def get_readonly_fields(self, request, obj=None):
-        """El código de acceso no puede modificarse después de creado"""
-        if obj:  # Si ya existe
-            return self.readonly_fields + ['codigo_acceso']
-        return self.readonly_fields
+        """
+        El código de acceso es editable para:
+        - Superusuarios
+        - Staff con permisos de cambio de UserProfile
+        """
+        readonly = list(self.readonly_fields)
+        
+        # Si no es superusuario y no tiene permisos, código de acceso es readonly
+        if not request.user.is_superuser and not request.user.has_perm('access_control.change_userprofile'):
+            readonly.append('codigo_acceso')
+        
+        return readonly
 
 
 @admin.register(Door)
