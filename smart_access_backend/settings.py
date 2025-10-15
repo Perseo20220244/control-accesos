@@ -50,9 +50,9 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_yasg',
     
-    # Local apps (se agregarán en fases posteriores)
-    # 'access_control',
-    # 'audit',
+    # Local apps
+    'access_control',
+    # 'audit',  # Se agregará en Fase 3
 ]
 
 MIDDLEWARE = [
