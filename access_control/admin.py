@@ -8,7 +8,7 @@ class UserProfileAdmin(admin.ModelAdmin):
     Administración de perfiles de usuario con roles y códigos de acceso.
     """
     list_display = [
-        'user', 'rol', 'codigo_acceso', 'telefono', 
+        'get_nombre_completo', 'rol', 'codigo_acceso', 'telefono', 
         'activo', 'fecha_creacion'
     ]
     list_filter = ['rol', 'activo', 'fecha_creacion']
@@ -18,6 +18,13 @@ class UserProfileAdmin(admin.ModelAdmin):
     ]
     ordering = ['user__username']
     readonly_fields = ['fecha_creacion', 'fecha_modificacion']
+    list_per_page = 25
+    
+    def get_nombre_completo(self, obj):
+        """Mostrar nombre completo o username"""
+        return obj.user.get_full_name() or obj.user.username
+    get_nombre_completo.short_description = 'Usuario'
+    get_nombre_completo.admin_order_field = 'user__username'
     
     fieldsets = (
         ('Información del Usuario', {
@@ -55,6 +62,7 @@ class DoorAdmin(admin.ModelAdmin):
     search_fields = ['nombre', 'ubicacion', 'descripcion']
     ordering = ['nombre']
     readonly_fields = ['fecha_creacion', 'fecha_modificacion']
+    list_per_page = 20
     
     fieldsets = (
         ('Información Básica', {
@@ -112,6 +120,7 @@ class LockStateAdmin(admin.ModelAdmin):
     ]
     ordering = ['-fecha_cambio']
     readonly_fields = ['fecha_cambio']
+    list_per_page = 20
     
     fieldsets = (
         ('Puerta y Estado', {
